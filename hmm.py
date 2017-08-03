@@ -40,6 +40,7 @@ class Hmm():
     """
     
     MIN_LOG_P = -200
+    MIN_P = np.exp(MIN_LOG_P)
     
     #---------------------------------------------------------------------------
     def __init__(s): 
@@ -401,7 +402,7 @@ class Hmm():
     #---------------------------------------------------------------------------
     def e_step(s):
         """ calculate state occupancy count [s.gamma_k] and
-                      state transition count [s.eta_kk]
+                      state transition count [s.xi_kk]
             based on 
             parameters [s.E_kd, s.T_kk, s.P_k] 
             
@@ -412,27 +413,56 @@ class Hmm():
         sum_counts_E_kd = np.zeros_like(s.E_kd, dtype=float)
         sum_counts_T_kk = np.zeros_like(s.T_kk, dtype=float)
 
+        total_sum_counts_P_k  = np.zeros_like(s.P_k, dtype=float)
+        total_sum_counts_E_kd = np.zeros_like(s.E_kd, dtype=float)
+        total_sum_counts_T_kk = np.zeros_like(s.T_kk, dtype=float)
+
         # for each sequence in training set
         for X in s.X_mat_train: 
+            T = len(X)
+            xi_nkk = np.zeros((len(X),s.k, s.k))
+
             a_nk = s.forward_v(X)
             #b_nk = s.backward_v(X)            
             b_nk = s.backward_for(X)            
-            counts_Y_nk = np.exp(a_nk + b_nk) # convert out of logspace
-            sum_counts_P_k += counts_Y_nk[0]
-            for t in range(len(X)-1):
+            p_X = np.exp(a_nk[0].sum()) + s.MIN_P
+            # gamma_nk[t,j] = P(state at t is j|X,params)
+            gamma_nk = np.exp(a_nk + b_nk)/p_X + s.MIN_P
+ 
+
+            for t in range(T-1):
                 for cur in range(s.k):
                     for to in range(s.k):
-                        sum_counts_T_kk[cur,to] += np.exp( \
-                                                    a_nk[t][cur] + \
-                                                    b_nk[t+1][to] + \
-                                                    s.E_kd[to,X[t+1]] + \
-                                                    s.T_kk[cur,to])
-                for state in range(s.k):
-                    sum_counts_E_kd[state,X[t]] += counts_Y_nk[t,state]
-            for state in range(s.k):
-                sum_counts_E_kd[state,X[-1]] += counts_Y_nk[-1,state]
+                        xi_nkk[t,cur,to] = np.exp(a_nk[t][cur] + \
+                                                  b_nk[t+1][to] + \
+                                                  s.E_kd[to,X[t+1]] + \
+                                                  s.T_kk[cur,to])/p_X
+        
+            xi_kk = xi_nkk.sum(axis=0) # sum over all t
+            xi_out_of_k = xi_kk.sum(axis=1) + s.MIN_P # sum over all to
+            gamma_k = gamma_nk.sum(axis=0)
 
-        return sum_counts_P_k, sum_counts_E_kd, sum_counts_T_kk
+            # P_k
+            sum_counts_P_k += gamma_nk[0] 
+
+            # T_kk
+            for cur in range(s.k):
+                for to in range(s.k):
+                    sum_counts_T_kk[cur,to] = xi_kk[cur,to] / xi_out_of_k[cur]
+
+            # E_kd
+            for t in range(T):
+                for k_i in range(s.k):
+                    sum_counts_E_kd[k_i,X[t]] = gamma_nk[t,k_i]
+            for k_i in range(s.k):
+                sum_counts_E_kd[k_i] /= gamma_k[k_i]
+
+
+            total_sum_counts_P_k  += sum_counts_P_k 
+            total_sum_counts_E_kd += sum_counts_E_kd
+            total_sum_counts_T_kk += sum_counts_T_kk
+
+        return total_sum_counts_P_k, total_sum_counts_E_kd, total_sum_counts_T_kk
 
     #---------------------------------------------------------------------------
     def e_step_v(s):
@@ -672,7 +702,6 @@ class TestHmm(unittest.TestCase):
             print("For = ", withFor)
             s.fail(msg="Failure! test_forward test failed")
             
-    # TODO: fix this after the bug fix in backward_for
     def test_backward_v(s):
         print("\n...testing backward_v(...)")
         hmm = Hmm() # Set up
@@ -717,7 +746,7 @@ class TestHmm(unittest.TestCase):
         s.assertTrue(np.allclose(np.e**hmm.E_kd, 
                                  np.array([[  1./3, 1./3, 1./3],
                                            [  0.50, 0.50, 0.00]])))
-    @unittest.skip
+    #@unittest.skip
     def test_em_train(s):
         print("\n...testing em_train(...)")
         hmm = Hmm()
