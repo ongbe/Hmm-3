@@ -40,7 +40,7 @@ class Hmm():
     """
     
     MIN_LOG_P = -200
-    MIN_P = np.exp(MIN_LOG_P)
+    #MIN_P = np.exp(MIN_LOG_P)
     
     #---------------------------------------------------------------------------
     def __init__(s): 
@@ -425,39 +425,42 @@ class Hmm():
             a_nk = s.forward_v(X)
             #b_nk = s.backward_v(X)            
             b_nk = s.backward_for(X)            
-            p_X = np.exp(a_nk[0].sum()) + s.MIN_P
+            #p_X = np.exp(a_nk[T-1].sum()) + s.MIN_P
+            p_X = logsumexp(a_nk[T-1])
             # gamma_nk[t,j] = P(state at t is j|X,params)
-            gamma_nk = np.exp(a_nk + b_nk)/p_X + s.MIN_P
+            gamma_nk = a_nk + b_nk - p_X
  
 
             for t in range(T-1):
                 for cur in range(s.k):
                     for to in range(s.k):
                         xi_nkk[t,cur,to] = np.exp(a_nk[t][cur] + \
-                                                  b_nk[t+1][to] + \
-                                                  s.E_kd[to,X[t+1]] + \
-                                                  s.T_kk[cur,to])/p_X
+                                           b_nk[t+1][to] + \
+                                           s.E_kd[to,X[t+1]] + \
+                                           s.T_kk[cur,to] - p_X)
         
             xi_kk = xi_nkk.sum(axis=0) # sum over all t
-            xi_out_of_k = xi_kk.sum(axis=1) + s.MIN_P # sum over all to
-            gamma_k = gamma_nk.sum(axis=0)
+            xi_out_of_k = xi_kk.sum(axis=1) # + s.MIN_P # sum over all to
+            gamma_k = np.exp(gamma_nk).sum(axis=0)
 
             # P_k
-            sum_counts_P_k += gamma_nk[0] 
+            sum_counts_P_k += np.exp(gamma_nk[0])
 
             # T_kk
             for cur in range(s.k):
                 for to in range(s.k):
-                    sum_counts_T_kk[cur,to] = xi_kk[cur,to] / xi_out_of_k[cur]
+                    sum_counts_T_kk[cur,to] = xi_kk[cur,to] #/ xi_out_of_k[cur]
 
             # E_kd
             for t in range(T):
                 for k_i in range(s.k):
-                    sum_counts_E_kd[k_i,X[t]] = gamma_nk[t,k_i]
-            for k_i in range(s.k):
-                sum_counts_E_kd[k_i] /= gamma_k[k_i]
+                    sum_counts_E_kd[k_i,X[t]] += np.exp(gamma_nk[t,k_i])
+            #for k_i in range(s.k):
+            #    sum_counts_E_kd[k_i] /= gamma_k[k_i]
 
-
+            assert(np.isclose(1,sum_counts_P_k.sum()))            
+            assert(np.isclose(T,sum_counts_E_kd.sum()))
+            assert(np.isclose(T-1,sum_counts_T_kk.sum()))
             total_sum_counts_P_k  += sum_counts_P_k 
             total_sum_counts_E_kd += sum_counts_E_kd
             total_sum_counts_T_kk += sum_counts_T_kk
@@ -482,6 +485,9 @@ class Hmm():
         sum_counts_P_k, sum_counts_E_kd, sum_counts_T_kk = counts
         s.P_k = np.log(sum_counts_P_k + smoothing_count)
         s.T_kk = np.log(sum_counts_T_kk + smoothing_count)
+        sum_counts_out_of_k = sum_counts_E_kd.sum(axis=1)
+        for k in range(s.k):
+            sum_counts_E_kd[k] /= sum_counts_out_of_k[k]
         s.E_kd = np.log(sum_counts_E_kd + smoothing_count)
     
         s.log_normalize()
@@ -492,7 +498,9 @@ class Hmm():
         for _ in range(n_iter):
             counts = s.e_step()
             s.m_step(counts)
-    
+            print('i:',_)
+            print('\t logP = ', s.viterbi_v(s.X_mat_train[0])[1])
+
     #---------------------------------------------------------------------------
     def mle_train(s, smoothing_count=None):
         """ Calculates parameters: [s.E_kd, s.T_kk, s.P_k] 
