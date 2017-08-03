@@ -401,26 +401,26 @@ class Hmm():
     
     #---------------------------------------------------------------------------
     def e_step(s):
-        """ calculate state occupancy count [s.gamma_k] and
-                      state transition count [s.xi_kk]
-            based on 
-            parameters [s.E_kd, s.T_kk, s.P_k] 
-            
-            sum_counts_Y_k = gamma_k[i] is the expected count of (Y = i)
-            sum_counts_T_kk = eta_kk[i,j] is the expected count of i to j trans
+        """ calculate:
+                prior count:            count_P_k
+                state emission count:   count_E_kd and
+                state transition count: count_T_kk
+            based on:
+                parameters [s.E_kd, s.T_kk, s.P_k] 
+
+            sum_counts_ are summed over all sequences
         """
+        counts_P_k  = np.zeros_like(s.P_k, dtype=float)
+        counts_E_kd = np.zeros_like(s.E_kd, dtype=float)
+
         sum_counts_P_k  = np.zeros_like(s.P_k, dtype=float)
         sum_counts_E_kd = np.zeros_like(s.E_kd, dtype=float)
         sum_counts_T_kk = np.zeros_like(s.T_kk, dtype=float)
 
-        total_sum_counts_P_k  = np.zeros_like(s.P_k, dtype=float)
-        total_sum_counts_E_kd = np.zeros_like(s.E_kd, dtype=float)
-        total_sum_counts_T_kk = np.zeros_like(s.T_kk, dtype=float)
-
         # for each sequence in training set
         for X in s.X_mat_train: 
             T = len(X)
-            xi_nkk = np.zeros((len(X),s.k, s.k))
+            count_T_nkk = np.zeros((len(X),s.k, s.k))
 
             a_nk = s.forward_v(X)
             #b_nk = s.backward_v(X)            
@@ -434,38 +434,28 @@ class Hmm():
             for t in range(T-1):
                 for cur in range(s.k):
                     for to in range(s.k):
-                        xi_nkk[t,cur,to] = np.exp(a_nk[t][cur] + \
-                                           b_nk[t+1][to] + \
-                                           s.E_kd[to,X[t+1]] + \
-                                           s.T_kk[cur,to] - p_X)
+                        count_T_nkk[t,cur,to] = np.exp(a_nk[t][cur] + \
+                                                       b_nk[t+1][to] + \
+                                                       s.E_kd[to,X[t+1]] + \
+                                                       s.T_kk[cur,to] - p_X)
         
-            xi_kk = xi_nkk.sum(axis=0) # sum over all t
-            xi_out_of_k = xi_kk.sum(axis=1) # + s.MIN_P # sum over all to
-            gamma_k = np.exp(gamma_nk).sum(axis=0)
-
-            # P_k
-            sum_counts_P_k += np.exp(gamma_nk[0])
-
-            # T_kk
-            for cur in range(s.k):
-                for to in range(s.k):
-                    sum_counts_T_kk[cur,to] = xi_kk[cur,to] #/ xi_out_of_k[cur]
+            counts_T_kk = count_T_nkk.sum(axis=0) # sum over all t
+            counts_P_k += np.exp(gamma_nk[0])
 
             # E_kd
             for t in range(T):
                 for k_i in range(s.k):
-                    sum_counts_E_kd[k_i,X[t]] += np.exp(gamma_nk[t,k_i])
-            #for k_i in range(s.k):
-            #    sum_counts_E_kd[k_i] /= gamma_k[k_i]
+                    counts_E_kd[k_i,X[t]] += np.exp(gamma_nk[t,k_i])
 
-            assert(np.isclose(1,sum_counts_P_k.sum()))            
-            assert(np.isclose(T,sum_counts_E_kd.sum()))
-            assert(np.isclose(T-1,sum_counts_T_kk.sum()))
-            total_sum_counts_P_k  += sum_counts_P_k 
-            total_sum_counts_E_kd += sum_counts_E_kd
-            total_sum_counts_T_kk += sum_counts_T_kk
 
-        return total_sum_counts_P_k, total_sum_counts_E_kd, total_sum_counts_T_kk
+            assert(np.isclose(1,counts_P_k.sum()))            
+            assert(np.isclose(T,counts_E_kd.sum()))
+            assert(np.isclose(T-1,counts_T_kk.sum()))
+            sum_counts_P_k  += np.exp(gamma_nk[0]) 
+            sum_counts_E_kd += counts_E_kd
+            sum_counts_T_kk += counts_T_kk
+
+        return sum_counts_P_k, sum_counts_E_kd, sum_counts_T_kk
 
     #---------------------------------------------------------------------------
     def e_step_v(s):
