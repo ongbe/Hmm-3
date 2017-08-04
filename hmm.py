@@ -251,11 +251,11 @@ class Hmm():
         logP  = 0
         for X in X_mat:
             logP += logsumexp(s.forward_v(X)[len(X)-1])
-            
         return logP
       
     #------------------------------------------------------------------      
     def p_X(s, X):
+        
         return logsumexp(s.forward_v(X)[len(X)-1])
 
     #---------------------------------------------------------------------------
@@ -497,10 +497,59 @@ class Hmm():
 
     #---------------------------------------------------------------------------
     def e_step_v(s):
-        """ vectorized version """
         
-        # TODO
-        pass
+        """ calculate:
+                prior count:            count_P_k
+                state emission count:   count_E_kd and
+                state transition count: count_T_kk
+            based on:
+                parameters [s.E_kd, s.T_kk, s.P_k] 
+    
+            sum_counts_ are summed over all sequences
+        """
+    
+        sum_counts_P_k  = np.zeros_like(s.P_k, dtype=float)
+        sum_counts_E_kd = np.zeros_like(s.E_kd, dtype=float)
+        sum_counts_T_kk = np.zeros_like(s.T_kk, dtype=float)
+        sum_log_P = 0
+    
+        # for each sequence in training set
+        for X in s.X_mat_train: 
+            T = len(X)
+            a_nk = s.forward_v(X)
+            b_nk = s.backward_v(X)                       
+            p_X = logsumexp(a_nk[T-1]) # log probability of sequence X
+    
+            # gamma_nk[t,j] = P(state at t is j|X,params)
+            gamma_nk = a_nk + b_nk - p_X
+    
+            # T_kk
+            count_T_nkk = np.zeros((len(X),s.k, s.k))
+            for t in range(T-1):
+                for cur in range(s.k):
+                    count_T_nkk[t,cur,:] = np.exp(a_nk[t][cur] + \
+                                                        b_nk[t+1][:] + \
+                                                        s.E_kd[:,X[t+1]] + \
+                                                        s.T_kk[cur,:] - p_X)
+    
+            counts_T_kk = count_T_nkk.sum(axis=0) # sum over all t
+            counts_P_k = np.exp(gamma_nk[0])
+    
+            # E_kd
+            counts_E_kd = np.zeros_like(s.E_kd, dtype=float)
+            for t in range(T):
+                counts_E_kd[:,X[t]] += np.exp(gamma_nk[t,:])
+    
+    
+            assert(np.isclose(1,counts_P_k.sum()))            
+            assert(np.isclose(T,counts_E_kd.sum()))
+            assert(np.isclose(T-1,counts_T_kk.sum()))
+            sum_counts_P_k  += np.exp(gamma_nk[0]) 
+            sum_counts_E_kd += counts_E_kd
+            sum_counts_T_kk += counts_T_kk
+            sum_log_P += p_X
+    
+        return [sum_counts_P_k, sum_counts_E_kd, sum_counts_T_kk], sum_log_P
     
     #---------------------------------------------------------------------------
     def m_step(s, counts):
@@ -528,6 +577,24 @@ class Hmm():
         for _ in range(n_iter):
             last_log_P = log_P 
             counts, log_P = s.e_step()
+            s.m_step(counts)
+            logging.info('i:' + str(_))
+            logging.info('\t logP = ' + str(log_P))
+            improvement = log_P - last_log_P
+            if improvement <= s.TOLERANCE:
+                logging.info('em_train convergence, exiting loop')
+                break
+        else:
+            logging.warn('em_train max_iter reached before convergence')
+            
+    #---------------------------------------------------------------------------
+    def em_train_v(s, n_iter):
+        """ train parameters using em algorithm vectorized """
+        
+        log_P = -np.inf
+        for _ in range(n_iter):
+            last_log_P = log_P 
+            counts, log_P = s.e_step_v()
             s.m_step(counts)
             logging.info('i:' + str(_))
             logging.info('\t logP = ' + str(log_P))
@@ -854,6 +921,69 @@ class TestHmm(unittest.TestCase):
         
         #TODO: add assert to check that weights ended up in a good place
 
+    def test_em_train_v(s):
+        # Tests using e_step_v from same initialization to see if same results
+        print("\n...testing em_train_v...")
+
+        # Parameters #
+        n = 10 # Generate n sequences
+        m = 10 # Length of each is m
+        n_iter = 120 # Number of iterations for each diff initialization
+        k = 5 # Number states
+        d = 5 # Number different observations        
+
+        # Generate random sequences from known parameters to be used in training
+        hmm = Hmm()
+        hmm.k = k
+        hmm.d = d
+        hmm.initialize_weights(hmm.k, hmm.d)
+        sequences = hmm.generate_sequences(n,m)
+        print('\nSource HMM weights (expected to converge to this):')        
+        hmm.print_percents()
+        hmm.X_mat_train = sequences[1]
+        print('Original Score (used to generate sequences): ', hmm.p_X_mat(sequences[1]))
+        print('\nGenerated Obs-Sequences to be used in em_train: \n', sequences[1])
+
+        # HMM to use Non-Vectorized em_train
+        hmm_for = Hmm()
+        hmm_for.k, hmm_for.d = k,d
+        hmm_for.initialize_weights(k,d)
+        hmm_for.X_mat_train = sequences[1]
+
+        # HMM to use Vectorized em_train_v
+        hmm_v = Hmm()
+        hmm_v.k, hmm_v.d = k,d
+        # Copy the weights from hmm_for so they start at the same point
+        hmm_v.P_k, hmm_v.T_kk, hmm_v.E_kd = hmm_for.P_k, hmm_for.T_kk, hmm_for.E_kd
+        hmm_v.X_mat_train = sequences[1]
+
+        # Run training on each
+        print("Training Non-Vectorized...")
+        t = time.time()        
+        hmm_for.em_train(n_iter) # Non-Vectorized
+        for_time = time.time() - t
+        print("Training Vectorized...")
+        t = time.time()
+        hmm_v.em_train_v(n_iter) # Vectorized
+        v_time = time.time() - t
+
+        # Print Speedup info
+        print('Non-Vectorized time: ', for_time)
+        print('Vectorized time: ', v_time)
+        print('Speedup = ', for_time / v_time, 'x')
+
+        # Check if they got the same results
+        assertTrue = np.allclose(hmm_for.P_k, hmm_v.P_k)
+        assertTrue &= np.allclose(hmm_for.T_kk, hmm_v.T_kk)
+        assertTrue &= np.allclose(hmm_for.E_kd, hmm_v.E_kd)
+
+        # TODO: Assert
+        print("\nSuccess = ", assertTrue) 
+        if(assertTrue):
+            print('The Vectorized and Non-Vectorized both trained to the same weights.')
+        else:
+            print("!THEY DID NOT TRAIN TO THE SAME WEIGHTS: em_train and em_train_v NOT EQUAL!")
+        # s.assertTrue(assertTrue, msg='Vectorized and non-vectorized got different results')
         
     @unittest.skip
     def test_viterbi_for(s):
@@ -996,7 +1126,8 @@ class TestHmm(unittest.TestCase):
                         #np.allclose(hmm.T_kk, hmm2.T_kk) and \
                         #np.allclose(hmm.E_kd, hmm2.E_kd), \
                         #msg="Did not converge!")
-
+        
+    @unittest.skip
     def test_truth_bluff(s):
         """ Trains an HMM on Truth-Tellers and one on Bluffers then 
             writes the weight files to truthers.weights and bluffers.weights
@@ -1005,7 +1136,7 @@ class TestHmm(unittest.TestCase):
 
         #  Parameters  #
         n_init = 3  # Random initializations to try
-        n_iter = 80 # Iterations in each initialization
+        n_iter = 100 # Iterations in each initialization
         k = 5 # Hidden States
         d = 5 # Outputs (number of clusters used)
         testSize = 15 # Number seq's to be used in X_mat_test and withheld from training
@@ -1023,6 +1154,8 @@ class TestHmm(unittest.TestCase):
         
         # Separate Test and Train data
         random.seed(seed)
+        truthHmm.X_mat_test = []
+        bluffHmm.X_mat_test = []        
         for i in range(testSize):
             truthHmm.X_mat_test.append(truthHmm.X_mat_train.pop(random.randrange(len(
                 truthHmm.X_mat_train))))
@@ -1033,13 +1166,13 @@ class TestHmm(unittest.TestCase):
             len(truthHmm.X_mat_train), len(bluffHmm.X_mat_train)))
         print('k = {0}, d = {1}, n_init = {2}, n_iter = {3}, seed = {4}'.format(\
             k,d,n_init,n_iter,seed))
-
+        
         print('Beginning training on Truth-Tellers....')
         bestScore = -np.inf
         # Run em_train for Truth-Tellers multiple times, finding the best-scoring one
         for i in range(n_init):
             truthHmm.initialize_weights(k,d)
-            truthHmm.em_train(n_iter)
+            truthHmm.em_train_v(n_iter)
             score = truthHmm.p_X_mat(truthHmm.X_mat_train)
             if(score > bestScore):
                 bestScore = score
@@ -1057,7 +1190,7 @@ class TestHmm(unittest.TestCase):
         # Run em_train for Bluffers multiple times, finding the best-scoring one     
         for i in range(n_init):
             bluffHmm.initialize_weights(k,d)
-            bluffHmm.em_train(n_iter)
+            bluffHmm.em_train_v(n_iter)
             score = bluffHmm.p_X_mat(bluffHmm.X_mat_train)
             if(score > bestScore):
                 bestScore = score
@@ -1075,9 +1208,14 @@ class TestHmm(unittest.TestCase):
         print('k = {0}, d = {1}, n_init = {2}, n_iter = {3}, seed = {4}'.format(\
             k,d,n_init,n_iter,seed)) # Print this again for convenience
 
+        # Write weight files for later usage
+        truthHmm.write_weight_file('truthers.weights')
+        bluffHmm.write_weight_file('bluffers.weights')
+
         # Evaluate on Testing sequences
         correct = 0
         for X in truthHmm.X_mat_test:
+            print(X)
             if(truthHmm.p_X(X) > bluffHmm.p_X(X)):
                 correct += 1
         for X in bluffHmm.X_mat_test:
@@ -1086,10 +1224,7 @@ class TestHmm(unittest.TestCase):
         
         print('Out of {0} test cases, {1} were correctly classified.'.format(\
             testSize + testSize, correct))
-        
-        # Write weight files for later usage
-        truthHmm.write_weight_file('truthers.weights')
-        bluffHmm.write_weight_file('bluffers.weights')         
+               
         
     def tearDown(s):
         """ runs after each test """
