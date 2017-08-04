@@ -39,6 +39,7 @@ class Hmm():
         
     """
     
+    TOLERANCE = 1e-3  # minimum training improvement to keep going
     MIN_LOG_P = -200
     #MIN_P = np.exp(MIN_LOG_P)
     
@@ -218,6 +219,15 @@ class Hmm():
         pX = np.sum(s.E_kd[Z_n,X_n])
         p = s.p_Z(Z_n) + pX
         return p                                
+
+    #------------------------------------------------------------------
+    def p_X_mat(s, X_mat):
+        """ caluclautes the most P of the sequence """
+        logP  = 0
+        for X in X_mat:
+            logP += logsumexp(s.forward_v(X)[len(X)])
+            
+        return logP
             
     #---------------------------------------------------------------------------
     def viterbi_for(s, X):
@@ -410,27 +420,24 @@ class Hmm():
 
             sum_counts_ are summed over all sequences
         """
-        counts_P_k  = np.zeros_like(s.P_k, dtype=float)
-        counts_E_kd = np.zeros_like(s.E_kd, dtype=float)
 
         sum_counts_P_k  = np.zeros_like(s.P_k, dtype=float)
         sum_counts_E_kd = np.zeros_like(s.E_kd, dtype=float)
         sum_counts_T_kk = np.zeros_like(s.T_kk, dtype=float)
+        sum_log_P = 0
 
         # for each sequence in training set
         for X in s.X_mat_train: 
             T = len(X)
-            count_T_nkk = np.zeros((len(X),s.k, s.k))
-
             a_nk = s.forward_v(X)
-            #b_nk = s.backward_v(X)            
-            b_nk = s.backward_for(X)            
-            #p_X = np.exp(a_nk[T-1].sum()) + s.MIN_P
-            p_X = logsumexp(a_nk[T-1])
+            b_nk = s.backward_v(X)                       
+            p_X = logsumexp(a_nk[T-1]) # log probability of sequence X
+            
             # gamma_nk[t,j] = P(state at t is j|X,params)
             gamma_nk = a_nk + b_nk - p_X
  
-
+            # T_kk
+            count_T_nkk = np.zeros((len(X),s.k, s.k))
             for t in range(T-1):
                 for cur in range(s.k):
                     for to in range(s.k):
@@ -440,9 +447,10 @@ class Hmm():
                                                        s.T_kk[cur,to] - p_X)
         
             counts_T_kk = count_T_nkk.sum(axis=0) # sum over all t
-            counts_P_k += np.exp(gamma_nk[0])
+            counts_P_k = np.exp(gamma_nk[0])
 
             # E_kd
+            counts_E_kd = np.zeros_like(s.E_kd, dtype=float)
             for t in range(T):
                 for k_i in range(s.k):
                     counts_E_kd[k_i,X[t]] += np.exp(gamma_nk[t,k_i])
@@ -454,8 +462,9 @@ class Hmm():
             sum_counts_P_k  += np.exp(gamma_nk[0]) 
             sum_counts_E_kd += counts_E_kd
             sum_counts_T_kk += counts_T_kk
-
-        return sum_counts_P_k, sum_counts_E_kd, sum_counts_T_kk
+            sum_log_P += p_X
+            
+        return [sum_counts_P_k, sum_counts_E_kd, sum_counts_T_kk], sum_log_P
 
     #---------------------------------------------------------------------------
     def e_step_v(s):
@@ -485,11 +494,20 @@ class Hmm():
     #---------------------------------------------------------------------------
     def em_train(s, n_iter):
         """ train parameters using em algorithm """
+        
+        log_P = -np.inf
         for _ in range(n_iter):
-            counts = s.e_step()
+            last_log_P = log_P 
+            counts, log_P = s.e_step()
             s.m_step(counts)
-            print('i:',_)
-            print('\t logP = ', s.viterbi_v(s.X_mat_train[0])[1])
+            logging.info('i:' + str(_))
+            logging.info('\t logP = ' + str(log_P))
+            improvement = log_P - last_log_P
+            if improvement <= s.TOLERANCE:
+                logging.info('em_train convergence, exiting loop')
+                break
+        else:
+            logging.warn('em_train max_iter reached before convergence')
 
     #---------------------------------------------------------------------------
     def mle_train(s, smoothing_count=None):
