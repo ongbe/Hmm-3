@@ -253,7 +253,7 @@ class Hmm():
             logP += logsumexp(s.forward_v(X)[len(X)-1])
         return logP
       
-    #------------------------------------------------------------------      
+    #--------------------------------------------------------------------------
     def p_X(s, X):
         
         return logsumexp(s.forward_v(X)[len(X)-1])
@@ -921,6 +921,7 @@ class TestHmm(unittest.TestCase):
         
         #TODO: add assert to check that weights ended up in a good place
 
+    @unittest.skip
     def test_em_train_v(s):
         # Tests using e_step_v from same initialization to see if same results
         print("\n...testing em_train_v...")
@@ -1127,7 +1128,7 @@ class TestHmm(unittest.TestCase):
                         #np.allclose(hmm.E_kd, hmm2.E_kd), \
                         #msg="Did not converge!")
         
-    @unittest.skip
+    #@unittest.skip
     def test_truth_bluff(s):
         """ Trains an HMM on Truth-Tellers and one on Bluffers then 
             writes the weight files to truthers.weights and bluffers.weights
@@ -1135,12 +1136,12 @@ class TestHmm(unittest.TestCase):
         print('\n...Testing truthers vs bluffers...')
 
         #  Parameters  #
-        n_init = 3  # Random initializations to try
-        n_iter = 100 # Iterations in each initialization
+        n_init = 5  # Random initializations to try
+        n_iter = 250 # Iterations in each initialization
         k = 5 # Hidden States
         d = 5 # Outputs (number of clusters used)
         testSize = 15 # Number seq's to be used in X_mat_test and withheld from training
-        seed = 5 # Random seed so we can recreate runs (for Test vs Train data)
+        seed = 15 # Random seed so we can recreate runs (for Test vs Train data)
         
         truthHmm = Hmm()
         bluffHmm = Hmm()
@@ -1224,7 +1225,13 @@ class TestHmm(unittest.TestCase):
         
         print('Out of {0} test cases, {1} were correctly classified.'.format(\
             testSize + testSize, correct))
-               
+        
+        with open('results-' + str(time.time()), 'w+') as f:
+            f.write('Out of {0} test cases, {1} were correctly classified.'.format(\
+            testSize + testSize, correct))
+            f.write('\nk = {0}, d = {1}, n_init = {2}, n_iter = {3}, seed = {4}'.format(\
+            k,d,n_init,n_iter,seed))
+            
         
     def tearDown(s):
         """ runs after each test """
